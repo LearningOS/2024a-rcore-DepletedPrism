@@ -100,6 +100,9 @@ pub fn rust_main() -> ! {
     heap_alloc::init_heap();
     trap::init();
     loader::load_apps();
+    // To avoid masking the S privileged clock interrupt, it's needed to call
+    // trap::enable_timer_interrupt() to set sie.stie before executing the first
+    // application.
     trap::enable_timer_interrupt();
     timer::set_next_trigger();
     task::run_first_task();
