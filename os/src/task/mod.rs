@@ -14,8 +14,10 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
+use crate::config::MAX_SYSCALL_NUM;
 use crate::loader::{get_app_data, get_num_app};
 use crate::sync::UPSafeCell;
+use crate::timer::get_time_ms;
 use crate::trap::TrapContext;
 use alloc::vec::Vec;
 use lazy_static::*;
@@ -139,7 +141,11 @@ impl TaskManager {
         if let Some(next) = self.find_next_task() {
             let mut inner = self.inner.exclusive_access();
             let current = inner.current_task;
-            inner.tasks[next].task_status = TaskStatus::Running;
+            let next_tcb = &mut inner.tasks[next];
+            next_tcb.task_status = TaskStatus::Running;
+            if next_tcb.scheduled_time.is_none() {
+                next_tcb.scheduled_time = Some(get_time_ms());
+            }
             inner.current_task = next;
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
@@ -152,6 +158,31 @@ impl TaskManager {
         } else {
             panic!("All applications completed!");
         }
+    }
+
+    fn count_current_syscall(&self, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let syscall_counter = &mut inner.tasks[current].syscall_counter;
+        if let Some(value) = syscall_counter.get_mut(&syscall_id) {
+            *value += 1;
+        } else {
+            syscall_counter.insert(syscall_id, 1);
+        }
+    }
+    fn get_current_syscall_counter(&self) -> [u32; MAX_SYSCALL_NUM] {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let mut result = [0; MAX_SYSCALL_NUM];
+        for (k, v) in inner.tasks[current].syscall_counter.iter() {
+            result[*k] = *v;
+        }
+        result
+    }
+    fn get_current_scheduled_time(&self) -> Option<usize> {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].scheduled_time
     }
 }
 
@@ -186,6 +217,22 @@ pub fn suspend_current_and_run_next() {
 pub fn exit_current_and_run_next() {
     mark_current_exited();
     run_next_task();
+}
+
+/// Count the syscall with id `syscall_id` called by the current 'Running' task.
+pub fn count_current_syscall(syscall_id: usize) {
+    TASK_MANAGER.count_current_syscall(syscall_id);
+}
+
+/// Get the number of syscalls of the current 'Running' task.
+pub fn get_current_syscall_counter() -> [u32; MAX_SYSCALL_NUM] {
+    TASK_MANAGER.get_current_syscall_counter()
+}
+
+/// Get the first scheduled time of the current 'Running' task.
+/// Return `None` if the task is not scheduled.
+pub fn get_current_scheduled_time() -> Option<usize> {
+    TASK_MANAGER.get_current_scheduled_time()
 }
 
 /// Get the current 'Running' task's token.

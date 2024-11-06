@@ -171,3 +171,14 @@ pub fn translated_byte_buffer(token: usize, ptr: *const u8, len: usize) -> Vec<&
     }
     v
 }
+
+/// Write data into ptr through buffers (a mutable u8 Vec) provided by `translated_byte_buffer`
+pub fn write_translated_byte(token: usize, ptr: *const u8, data: &[u8]) {
+    let len = data.len();
+    let buffers = translated_byte_buffer(token, ptr, len);
+    let mut current = 0;
+    for buffer in buffers {
+        buffer.copy_from_slice(&data[current..len.min(current + buffer.len())]);
+        current += buffer.len();
+    }
+}

@@ -5,6 +5,7 @@ use crate::mm::{
     kernel_stack_position, MapPermission, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE,
 };
 use crate::trap::{trap_handler, TrapContext};
+use alloc::collections::BTreeMap;
 
 /// The task control block (TCB) of a task.
 pub struct TaskControlBlock {
@@ -13,6 +14,12 @@ pub struct TaskControlBlock {
 
     /// Maintain the execution status of the current process
     pub task_status: TaskStatus,
+
+    /// The numbers of syscall called by task
+    pub syscall_counter: BTreeMap<usize, u32>,
+
+    /// The time when it was first scheduled (in ms)
+    pub scheduled_time: Option<usize>,
 
     /// Application address space
     pub memory_set: MemorySet,
@@ -58,6 +65,8 @@ impl TaskControlBlock {
         let task_control_block = Self {
             task_status,
             task_cx: TaskContext::goto_trap_return(kernel_stack_top),
+            syscall_counter: BTreeMap::new(),
+            scheduled_time: None,
             memory_set,
             trap_cx_ppn,
             base_size: user_sp,
