@@ -1,11 +1,11 @@
 //! Process management syscalls
 use crate::{
     config::MAX_SYSCALL_NUM,
-    mm::write_translated_byte,
+    mm::{write_translated_byte, MapPermission, VirtAddr},
     task::{
-        change_program_brk, current_user_token, exit_current_and_run_next,
-        get_current_scheduled_time, get_current_syscall_counter, suspend_current_and_run_next,
-        TaskStatus,
+        change_program_brk, current_scheduled_time, current_syscall_counter, current_user_token,
+        exit_current_and_run_next, insert_framed_area, suspend_current_and_run_next,
+        unmap_framed_area, TaskStatus,
     },
     timer::{get_time_ms, get_time_us},
 };
@@ -66,10 +66,10 @@ pub fn sys_task_info(ti: *mut TaskInfo) -> isize {
         core::slice::from_raw_parts(
             &TaskInfo {
                 status: TaskStatus::Running,
-                syscall_times: get_current_syscall_counter(),
+                syscall_times: current_syscall_counter(),
                 // since the status of current task should be `Running`, `unwarp()`
                 // should not enconuter a `None` value
-                time: ms - get_current_scheduled_time().unwrap(),
+                time: ms - current_scheduled_time().unwrap(),
             } as *const TaskInfo as *const u8,
             core::mem::size_of::<TaskInfo>(),
         )
@@ -77,16 +77,32 @@ pub fn sys_task_info(ti: *mut TaskInfo) -> isize {
     0
 }
 
-// YOUR JOB: Implement mmap.
-pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
-    trace!("kernel: sys_mmap NOT IMPLEMENTED YET!");
-    -1
+/// apply for `len` bytes of physical memory, and map it to virtual memory
+/// starting from `start` with the memory page property `port`
+pub fn sys_mmap(start: usize, len: usize, port: usize) -> isize {
+    trace!("kernel: sys_mmap");
+    let start_va = VirtAddr::from(start);
+    if !start_va.aligned() || (port & 0x7) == 0 || (port & !0x7) != 0 {
+        -1
+    } else {
+        insert_framed_area(
+            start_va,
+            VirtAddr::from(start + len),
+            MapPermission::U | (MapPermission::from_bits_truncate((port << 1) as u8)),
+        )
+    }
 }
 
-// YOUR JOB: Implement munmap.
-pub fn sys_munmap(_start: usize, _len: usize) -> isize {
-    trace!("kernel: sys_munmap NOT IMPLEMENTED YET!");
-    -1
+/// unmap virtual memory [start, start + len), and the given interval should be
+/// unique and integrated
+pub fn sys_munmap(start: usize, len: usize) -> isize {
+    trace!("kernel: sys_munmap");
+    let start_va = VirtAddr::from(start);
+    if !start_va.aligned() {
+        -1
+    } else {
+        unmap_framed_area(start_va, VirtAddr::from(start + len))
+    }
 }
 
 /// change data segment size

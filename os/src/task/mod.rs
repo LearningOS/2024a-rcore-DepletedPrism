@@ -16,6 +16,7 @@ mod task;
 
 use crate::config::MAX_SYSCALL_NUM;
 use crate::loader::{get_app_data, get_num_app};
+use crate::mm::{MapPermission, VirtAddr, VirtPageNum};
 use crate::sync::UPSafeCell;
 use crate::timer::get_time_ms;
 use crate::trap::TrapContext;
@@ -170,6 +171,7 @@ impl TaskManager {
             syscall_counter.insert(syscall_id, 1);
         }
     }
+
     fn get_current_syscall_counter(&self) -> [u32; MAX_SYSCALL_NUM] {
         let inner = self.inner.exclusive_access();
         let current = inner.current_task;
@@ -179,10 +181,44 @@ impl TaskManager {
         }
         result
     }
+
     fn get_current_scheduled_time(&self) -> Option<usize> {
         let inner = self.inner.exclusive_access();
         let current = inner.current_task;
         inner.tasks[current].scheduled_time
+    }
+
+    fn insert_current_framed_area(
+        &self,
+        start_va: VirtAddr,
+        end_va: VirtAddr,
+        permission: MapPermission,
+    ) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let memory_set = &mut inner.tasks[current].memory_set;
+
+        // check whether pages would be overlapped
+        if memory_set.is_overlapped(
+            VirtPageNum::from(start_va.floor()),
+            VirtPageNum::from(end_va.ceil()),
+        ) {
+            -1
+        } else {
+            memory_set.insert_framed_area(start_va, end_va, permission);
+            0
+        }
+    }
+
+    fn unmap_current_framed_area(&self, start_va: VirtAddr, end_va: VirtAddr) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let memory_set = &mut inner.tasks[current].memory_set;
+
+        memory_set.unmap(
+            VirtPageNum::from(start_va.floor()),
+            VirtPageNum::from(end_va.ceil()),
+        )
     }
 }
 
@@ -225,13 +261,13 @@ pub fn count_current_syscall(syscall_id: usize) {
 }
 
 /// Get the number of syscalls of the current 'Running' task.
-pub fn get_current_syscall_counter() -> [u32; MAX_SYSCALL_NUM] {
+pub fn current_syscall_counter() -> [u32; MAX_SYSCALL_NUM] {
     TASK_MANAGER.get_current_syscall_counter()
 }
 
 /// Get the first scheduled time of the current 'Running' task.
 /// Return `None` if the task is not scheduled.
-pub fn get_current_scheduled_time() -> Option<usize> {
+pub fn current_scheduled_time() -> Option<usize> {
     TASK_MANAGER.get_current_scheduled_time()
 }
 
@@ -248,4 +284,18 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+/// Insert pages in range [start_va, end_va) into the current 'Running' task
+pub fn insert_framed_area(
+    start_va: VirtAddr,
+    end_va: VirtAddr,
+    permission: MapPermission,
+) -> isize {
+    TASK_MANAGER.insert_current_framed_area(start_va, end_va, permission)
+}
+
+/// Unmap pages in range [start_va, end_va) in the curring 'Running' task
+pub fn unmap_framed_area(start_va: VirtAddr, end_va: VirtAddr) -> isize {
+    TASK_MANAGER.unmap_current_framed_area(start_va, end_va)
 }
