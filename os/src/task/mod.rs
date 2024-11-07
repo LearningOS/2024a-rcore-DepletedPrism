@@ -32,8 +32,9 @@ pub use context::TaskContext;
 pub use id::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
 pub use manager::add_task;
 pub use processor::{
-    current_task, current_trap_cx, current_user_token, run_tasks, schedule, take_current_task,
-    Processor,
+    count_current_syscall, current_scheduled_time, current_syscall_counter, current_task,
+    current_trap_cx, current_user_token, insert_framed_area, run_tasks, schedule,
+    take_current_task, unmap_framed_area, Processor,
 };
 /// Suspend the current 'Running' task and run the next task in task list.
 pub fn suspend_current_and_run_next() {
