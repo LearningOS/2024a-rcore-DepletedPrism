@@ -318,6 +318,34 @@ impl MemorySet {
             false
         }
     }
+
+    /// check whether [start, end) is overlapped with existent map areas
+    pub fn is_overlapped(&self, start_vpn: VirtPageNum, end_vpn: VirtPageNum) -> bool {
+        let end_vpn = VirtPageNum::from(end_vpn.0 - 1);
+        for area in self.areas.iter() {
+            let l = area.vpn_range.get_start();
+            let r = area.vpn_range.get_end();
+            if (start_vpn >= l && start_vpn < r) || (end_vpn >= l && end_vpn < r) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// unmap virtual memory in interval [start_vpn, end_vpn)
+    pub fn unmap(&mut self, start_vpn: VirtPageNum, end_vpn: VirtPageNum) -> isize {
+        // returning `-1` instead of wrapping it with `Result` seems to be a bad manner in Rust...
+        // but there is no ready-to-use Error type
+        if let Some(idx) = self.areas.iter().position(|area| {
+            area.vpn_range.get_start() == start_vpn && area.vpn_range.get_end() == end_vpn
+        }) {
+            self.areas[idx].unmap(&mut self.page_table);
+            self.areas.remove(idx);
+            0
+        } else {
+            -1
+        }
+    }
 }
 /// map area structure, controls a contiguous piece of virtual memory
 pub struct MapArea {

@@ -7,6 +7,8 @@
 use super::__switch;
 use super::{fetch_task, TaskStatus};
 use super::{TaskContext, TaskControlBlock};
+use crate::config::MAX_SYSCALL_NUM;
+use crate::mm::{MapPermission, VirtAddr, VirtPageNum};
 use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
 use alloc::sync::Arc;
@@ -43,6 +45,64 @@ impl Processor {
     ///Get current task in cloning semanteme
     pub fn current(&self) -> Option<Arc<TaskControlBlock>> {
         self.current.as_ref().map(Arc::clone)
+    }
+
+    fn count_current_syscall(&self, syscall_id: usize) {
+        let current = self.current().unwrap();
+        let mut inner = current.inner_exclusive_access();
+        let syscall_counter = &mut inner.syscall_counter;
+        if let Some(value) = syscall_counter.get_mut(&syscall_id) {
+            *value += 1;
+        } else {
+            syscall_counter.insert(syscall_id, 1);
+        }
+    }
+
+    fn get_current_syscall_counter(&self) -> [u32; MAX_SYSCALL_NUM] {
+        let current = self.current().unwrap();
+        let inner = current.inner_exclusive_access();
+        let mut result = [0; MAX_SYSCALL_NUM];
+        for (k, v) in inner.syscall_counter.iter() {
+            result[*k] = *v;
+        }
+        result
+    }
+
+    fn get_current_scheduled_time(&self) -> Option<usize> {
+        let current = self.current().unwrap();
+        let inner = current.inner_exclusive_access();
+        inner.scheduled_time
+    }
+
+    fn insert_current_framed_area(
+        &self,
+        start_va: VirtAddr,
+        end_va: VirtAddr,
+        permission: MapPermission,
+    ) -> isize {
+        let current = self.current().unwrap();
+        let mut inner = current.inner_exclusive_access();
+        let memory_set = &mut inner.memory_set;
+        // check whether pages would be overlapped
+        if memory_set.is_overlapped(
+            VirtPageNum::from(start_va.floor()),
+            VirtPageNum::from(end_va.ceil()),
+        ) {
+            -1
+        } else {
+            memory_set.insert_framed_area(start_va, end_va, permission);
+            0
+        }
+    }
+
+    fn unmap_current_framed_area(&self, start_va: VirtAddr, end_va: VirtAddr) -> isize {
+        let current = self.current().unwrap();
+        let mut inner = current.inner_exclusive_access();
+        let memory_set = &mut inner.memory_set;
+        memory_set.unmap(
+            VirtPageNum::from(start_va.floor()),
+            VirtPageNum::from(end_va.ceil()),
+        )
     }
 }
 
@@ -86,6 +146,24 @@ pub fn current_task() -> Option<Arc<TaskControlBlock>> {
     PROCESSOR.exclusive_access().current()
 }
 
+/// Count the syscall with id `syscall_id` called by the current 'Running' task.
+pub fn count_current_syscall(syscall_id: usize) {
+    PROCESSOR
+        .exclusive_access()
+        .count_current_syscall(syscall_id);
+}
+
+/// Get the number of syscalls of the current 'Running' task.
+pub fn current_syscall_counter() -> [u32; MAX_SYSCALL_NUM] {
+    PROCESSOR.exclusive_access().get_current_syscall_counter()
+}
+
+/// Get the first scheduled time of the current 'Running' task.
+/// Return `None` if the task is not scheduled.
+pub fn current_scheduled_time() -> Option<usize> {
+    PROCESSOR.exclusive_access().get_current_scheduled_time()
+}
+
 /// Get the current user token(addr of page table)
 pub fn current_user_token() -> usize {
     let task = current_task().unwrap();
@@ -108,4 +186,22 @@ pub fn schedule(switched_task_cx_ptr: *mut TaskContext) {
     unsafe {
         __switch(switched_task_cx_ptr, idle_task_cx_ptr);
     }
+}
+
+/// Insert pages in range [start_va, end_va) into the current 'Running' task
+pub fn insert_framed_area(
+    start_va: VirtAddr,
+    end_va: VirtAddr,
+    permission: MapPermission,
+) -> isize {
+    PROCESSOR
+        .exclusive_access()
+        .insert_current_framed_area(start_va, end_va, permission)
+}
+
+/// Unmap pages in range [start_va, end_va) in the curring 'Running' task
+pub fn unmap_framed_area(start_va: VirtAddr, end_va: VirtAddr) -> isize {
+    PROCESSOR
+        .exclusive_access()
+        .unmap_current_framed_area(start_va, end_va)
 }

@@ -6,6 +6,7 @@ use crate::fs::{File, Stdin, Stdout};
 use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::sync::UPSafeCell;
 use crate::trap::{trap_handler, TrapContext};
+use alloc::collections::BTreeMap;
 use alloc::sync::{Arc, Weak};
 use alloc::vec;
 use alloc::vec::Vec;
@@ -51,6 +52,12 @@ pub struct TaskControlBlockInner {
 
     /// Maintain the execution status of the current process
     pub task_status: TaskStatus,
+
+    /// The numbers of syscall called by task
+    pub syscall_counter: BTreeMap<usize, u32>,
+
+    /// The time when it was first scheduled (in ms)
+    pub scheduled_time: Option<usize>,
 
     /// Application address space
     pub memory_set: MemorySet,
@@ -121,6 +128,8 @@ impl TaskControlBlock {
                     base_size: user_sp,
                     task_cx: TaskContext::goto_trap_return(kernel_stack_top),
                     task_status: TaskStatus::Ready,
+                    syscall_counter: BTreeMap::new(),
+                    scheduled_time: None,
                     memory_set,
                     parent: None,
                     children: Vec::new(),
@@ -209,6 +218,8 @@ impl TaskControlBlock {
                     base_size: parent_inner.base_size,
                     task_cx: TaskContext::goto_trap_return(kernel_stack_top),
                     task_status: TaskStatus::Ready,
+                    syscall_counter: BTreeMap::new(),
+                    scheduled_time: None,
                     memory_set,
                     parent: Some(Arc::downgrade(self)),
                     children: Vec::new(),
