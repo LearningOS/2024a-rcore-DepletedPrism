@@ -23,3 +23,8 @@ pub const TRAP_CONTEXT_BASE: usize = TRAMPOLINE - PAGE_SIZE;
 pub const CLOCK_FREQ: usize = 12500000;
 /// the physical memory end
 pub const MEMORY_END: usize = 0x88000000;
+
+/// big stride used in stride schedule
+pub const BIG_STRIDE: usize = usize::MAX;
+/// initial priority when process created
+pub const INIT_PRIORITY: usize = 16;

@@ -104,6 +104,11 @@ impl Processor {
             VirtPageNum::from(end_va.ceil()),
         )
     }
+
+    fn set_current_priority(&self, new_priority: usize) {
+        let current = self.current().unwrap();
+        current.set_priority(new_priority);
+    }
 }
 
 lazy_static! {
@@ -204,4 +209,11 @@ pub fn unmap_framed_area(start_va: VirtAddr, end_va: VirtAddr) -> isize {
     PROCESSOR
         .exclusive_access()
         .unmap_current_framed_area(start_va, end_va)
+}
+
+/// Set current 'Runnign' task's priority
+pub fn set_current_priority(new_priority: usize) {
+    PROCESSOR
+        .exclusive_access()
+        .set_current_priority(new_priority)
 }
