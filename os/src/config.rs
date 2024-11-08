@@ -25,3 +25,8 @@ pub const CLOCK_FREQ: usize = 12500000;
 pub const MEMORY_END: usize = 0x88000000;
 /// The base address of control registers in Virtio_Block device
 pub const MMIO: &[(usize, usize)] = &[(0x10001000, 0x1000)];
+
+/// big stride used in stride schedule
+pub const BIG_STRIDE: usize = usize::MAX;
+/// initial priority when process created
+pub const INIT_PRIORITY: usize = 16;

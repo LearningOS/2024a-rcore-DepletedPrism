@@ -1,7 +1,7 @@
 //! Types related to task management & Functions for completely changing TCB
 use super::TaskContext;
 use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
-use crate::config::TRAP_CONTEXT_BASE;
+use crate::config::{BIG_STRIDE, INIT_PRIORITY, TRAP_CONTEXT_BASE};
 use crate::fs::{File, Stdin, Stdout};
 use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::sync::UPSafeCell;
@@ -11,6 +11,7 @@ use alloc::sync::{Arc, Weak};
 use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::RefMut;
+use core::cmp::{Ordering, PartialEq, PartialOrd};
 
 /// Task control block structure
 ///
@@ -36,6 +37,19 @@ impl TaskControlBlock {
     pub fn get_user_token(&self) -> usize {
         let inner = self.inner_exclusive_access();
         inner.memory_set.token()
+    }
+
+    /// Set task's priority
+    pub fn set_priority(&self, new_priority: usize) {
+        let mut inner = self.inner_exclusive_access();
+        inner.priority = new_priority;
+    }
+
+    /// Extend task's stride
+    pub fn extend_stride(&self) {
+        let mut inner = self.inner_exclusive_access();
+        let priority = inner.priority;
+        inner.stride.extend(priority);
     }
 }
 
@@ -78,6 +92,12 @@ pub struct TaskControlBlockInner {
 
     /// Program break
     pub program_brk: usize,
+
+    /// Stride
+    pub stride: Stride,
+
+    /// Priority
+    pub priority: usize,
 }
 
 impl TaskControlBlockInner {
@@ -144,6 +164,8 @@ impl TaskControlBlock {
                     ],
                     heap_bottom: user_sp,
                     program_brk: user_sp,
+                    stride: Stride(0),
+                    priority: INIT_PRIORITY,
                 })
             },
         };
@@ -227,6 +249,8 @@ impl TaskControlBlock {
                     fd_table: new_fd_table,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
+                    stride: Stride(0),
+                    priority: INIT_PRIORITY,
                 })
             },
         });
@@ -236,6 +260,67 @@ impl TaskControlBlock {
         // **** access child PCB exclusively
         let trap_cx = task_control_block.inner_exclusive_access().get_trap_cx();
         trap_cx.kernel_sp = kernel_stack_top;
+        // return
+        task_control_block
+        // **** release child PCB
+        // ---- release parent PCB
+    }
+
+    /// create a new child process
+    pub fn spawn(self: &Arc<Self>, elf_data: &[u8]) -> Arc<Self> {
+        let (memory_set, user_sp, entry_point) = MemorySet::from_elf(elf_data);
+        // ---- access parent PCB exclusively
+        let mut parent_inner = self.inner_exclusive_access();
+        let trap_cx_ppn = memory_set
+            .translate(VirtAddr::from(TRAP_CONTEXT_BASE).into())
+            .unwrap()
+            .ppn();
+        // alloc a pid and a kernel stack in kernel space
+        let pid_handle = pid_alloc();
+        let kernel_stack = kstack_alloc();
+        let kernel_stack_top = kernel_stack.get_top();
+        let task_control_block = Arc::new(TaskControlBlock {
+            pid: pid_handle,
+            kernel_stack,
+            inner: unsafe {
+                UPSafeCell::new(TaskControlBlockInner {
+                    trap_cx_ppn,
+                    base_size: user_sp,
+                    task_cx: TaskContext::goto_trap_return(kernel_stack_top),
+                    task_status: TaskStatus::Ready,
+                    syscall_counter: BTreeMap::new(),
+                    scheduled_time: None,
+                    memory_set,
+                    parent: Some(Arc::downgrade(self)),
+                    children: Vec::new(),
+                    exit_code: 0,
+                    fd_table: vec![
+                        // 0 -> stdin
+                        Some(Arc::new(Stdin)),
+                        // 1 -> stdout
+                        Some(Arc::new(Stdout)),
+                        // 2 -> stderr
+                        Some(Arc::new(Stdout)),
+                    ],
+                    heap_bottom: user_sp,
+                    program_brk: user_sp,
+                    stride: Stride(0),
+                    priority: INIT_PRIORITY,
+                })
+            },
+        });
+        // add child
+        parent_inner.children.push(task_control_block.clone());
+        // prepare TrapContext in user space
+        // **** access child PCB exclusively
+        let trap_cx = task_control_block.inner_exclusive_access().get_trap_cx();
+        *trap_cx = TrapContext::app_init_context(
+            entry_point,
+            user_sp,
+            KERNEL_SPACE.exclusive_access().token(),
+            kernel_stack_top,
+            trap_handler as usize,
+        );
         // return
         task_control_block
         // **** release child PCB
@@ -285,4 +370,62 @@ pub enum TaskStatus {
     Running,
     /// exited
     Zombie,
+}
+
+/// used for Stride Scheduling
+#[derive(Eq)]
+pub struct Stride(usize);
+
+impl From<usize> for Stride {
+    fn from(value: usize) -> Self {
+        Stride(value)
+    }
+}
+
+impl Stride {
+    pub fn extend(&mut self, other: usize) {
+        self.0 = self.0.wrapping_add(BIG_STRIDE / other);
+    }
+}
+
+impl PartialOrd for Stride {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        if self.0.abs_diff(other.0) <= BIG_STRIDE / 2 {
+            Some(self.0.cmp(&other.0))
+        } else {
+            Some(other.0.cmp(&self.0))
+        }
+    }
+}
+
+impl PartialEq for Stride {
+    fn eq(&self, other: &Self) -> bool {
+        self.partial_cmp(&other) == Some(Ordering::Equal)
+    }
+}
+
+impl PartialOrd for TaskControlBlock {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        let inner = self.inner_exclusive_access();
+        let other_inner = other.inner_exclusive_access();
+        // make a max-heap can find a minimum stride
+        match other_inner.stride.partial_cmp(&inner.stride) {
+            Some(Ordering::Equal) => Some(self.getpid().cmp(&other.getpid())),
+            ordering => ordering,
+        }
+    }
+}
+
+impl PartialEq for TaskControlBlock {
+    fn eq(&self, other: &Self) -> bool {
+        self.partial_cmp(&other) == Some(Ordering::Equal)
+    }
+}
+
+impl Eq for TaskControlBlock {}
+
+impl Ord for TaskControlBlock {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.partial_cmp(&other).unwrap()
+    }
 }

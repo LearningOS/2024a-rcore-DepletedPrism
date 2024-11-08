@@ -8,7 +8,7 @@ use crate::{
     mm::{translated_refmut, translated_str, MapPermission, VirtAddr},
     task::{
         add_task, current_scheduled_time, current_syscall_counter, current_task,
-        current_user_token, exit_current_and_run_next, insert_framed_area,
+        current_user_token, exit_current_and_run_next, insert_framed_area, set_current_priority,
         suspend_current_and_run_next, unmap_framed_area, TaskStatus,
     },
     timer::{get_time_ms, get_time_us},
@@ -122,10 +122,7 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
 
 /// get time with second and microsecond
 pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_get_time NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
+    trace!("kernel:pid[{}] sys_get_time", current_task().unwrap().pid.0);
     let us = get_time_us();
     *translated_refmut(current_user_token(), ts) = TimeVal {
         sec: us / 1_000_000,
@@ -137,7 +134,7 @@ pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
 /// get information about the current running task
 pub fn sys_task_info(ti: *mut TaskInfo) -> isize {
     trace!(
-        "kernel:pid[{}] sys_task_info NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_task_info",
         current_task().unwrap().pid.0
     );
     let ms = get_time_ms();
@@ -154,10 +151,7 @@ pub fn sys_task_info(ti: *mut TaskInfo) -> isize {
 /// apply for `len` bytes of physical memory, and map it to virtual memory
 /// starting from `start` with the memory page property `port`
 pub fn sys_mmap(start: usize, len: usize, port: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_mmap NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
+    trace!("kernel:pid[{}] sys_mmap", current_task().unwrap().pid.0);
     let start_va = VirtAddr::from(start);
     if !start_va.aligned() || (port & 0x7) == 0 || (port & !0x7) != 0 {
         -1
@@ -173,10 +167,7 @@ pub fn sys_mmap(start: usize, len: usize, port: usize) -> isize {
 /// unmap virtual memory [start, start + len), and the given interval should be
 /// unique and integrated
 pub fn sys_munmap(start: usize, len: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_munmap NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
+    trace!("kernel:pid[{}] sys_munmap", current_task().unwrap().pid.0);
     let start_va = VirtAddr::from(start);
     if !start_va.aligned() {
         -1
@@ -195,21 +186,33 @@ pub fn sys_sbrk(size: i32) -> isize {
     }
 }
 
-/// YOUR JOB: Implement spawn.
-/// HINT: fork + exec =/= spawn
-pub fn sys_spawn(_path: *const u8) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_spawn NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+/// create a new child process that executes a specific file
+pub fn sys_spawn(path: *const u8) -> isize {
+    trace!("kernel:pid[{}] sys_spawn", current_task().unwrap().pid.0);
+    let token = current_user_token();
+    let path = translated_str(token, path);
+    if let Some(app_inode) = open_file(path.as_str(), OpenFlags::RDONLY) {
+        let current_task = current_task().unwrap();
+        let new_task = current_task.spawn(app_inode.read_all().as_slice());
+        let new_pid = new_task.getpid();
+        // add new task to scheduler
+        add_task(new_task);
+        new_pid as isize
+    } else {
+        -1
+    }
 }
 
-// YOUR JOB: Set task priority.
-pub fn sys_set_priority(_prio: isize) -> isize {
+/// set task priority
+pub fn sys_set_priority(prio: isize) -> isize {
     trace!(
-        "kernel:pid[{}] sys_set_priority NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_set_priority",
         current_task().unwrap().pid.0
     );
-    -1
+    if prio >= 2 {
+        set_current_priority(prio as usize);
+        prio
+    } else {
+        -1
+    }
 }
